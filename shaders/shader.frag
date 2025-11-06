@@ -12,5 +12,15 @@ layout (binding = 1, std140) uniform ModelUniforms {
 };
 
 void main() {
-	final_color = vec4(albedo_color, 1.0f);
+	vec3 normal = normalize(f_normal);
+	
+	vec3 light_dir = normalize(vec3(1.0, 1.0, 0.5));
+	
+	float diffuse = max(dot(normal, light_dir), 0.0);
+	
+	float ambient = 0.3;
+	
+	float lighting = ambient + diffuse * 0.7;
+	
+	final_color = vec4(albedo_color * lighting, 1.0f);
 }
