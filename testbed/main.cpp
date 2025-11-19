@@ -168,6 +168,8 @@ VkShaderModule loadShaderModule(const char* path) {
 Mesh createOctahedron() {
 	std::vector<Vertex> vertices;
 	std::vector<uint32_t> indices;
+	veekay::vec2 uv = {0, 0};
+	veekay::vec3 n = {0, 0, 0};
 
 	veekay::vec3 top = {0.0f, 1.0f, 0.0f};
 	veekay::vec3 bottom = {0.0f, -1.0f, 0.0f};
@@ -176,59 +178,44 @@ Mesh createOctahedron() {
 	veekay::vec3 right = {1.0f, 0.0f, 0.0f};
 	veekay::vec3 left = {-1.0f, 0.0f, 0.0f};
 
-	auto calculateNormal = [](const veekay::vec3& a, const veekay::vec3& b, const veekay::vec3& c) {
-		veekay::vec3 ab = {b.x - a.x, b.y - a.y, b.z - a.z};
-		veekay::vec3 ac = {c.x - a.x, c.y - a.y, c.z - a.z};
-		veekay::vec3 normal = veekay::vec3::cross(ab, ac);
-		return veekay::vec3::normalized(normal);
-	};
-
-	veekay::vec3 n1 = calculateNormal(top, right, front);
-	vertices.push_back({top, n1, {0.5f, 1.0f}});
-	vertices.push_back({right, n1, {1.0f, 0.5f}});
-	vertices.push_back({front, n1, {0.0f, 0.5f}});
+	vertices.push_back({top, n, uv});
+	vertices.push_back({right, n, uv});
+	vertices.push_back({front, n, uv});
 	indices.insert(indices.end(), {0, 1, 2});
 
-	veekay::vec3 n2 = calculateNormal(top, front, left);
-	vertices.push_back({top, n2, {0.5f, 1.0f}});
-	vertices.push_back({front, n2, {0.0f, 0.5f}});
-	vertices.push_back({left, n2, {0.0f, 0.5f}});
+	vertices.push_back({top, n, uv});
+	vertices.push_back({front, n, uv});
+	vertices.push_back({left, n, uv});
 	indices.insert(indices.end(), {3, 4, 5});
 
-	veekay::vec3 n3 = calculateNormal(top, left, back);
-	vertices.push_back({top, n3, {0.5f, 1.0f}});
-	vertices.push_back({left, n3, {0.0f, 0.5f}});
-	vertices.push_back({back, n3, {1.0f, 0.5f}});
+	vertices.push_back({top, n, uv});
+	vertices.push_back({left, n, uv});
+	vertices.push_back({back, n, uv});
 	indices.insert(indices.end(), {6, 7, 8});
 
-	veekay::vec3 n4 = calculateNormal(top, back, right);
-	vertices.push_back({top, n4, {0.5f, 1.0f}});
-	vertices.push_back({back, n4, {1.0f, 0.5f}});
-	vertices.push_back({right, n4, {1.0f, 0.5f}});
+	vertices.push_back({top, n, uv});
+	vertices.push_back({back, n, uv});
+	vertices.push_back({right, n, uv});
 	indices.insert(indices.end(), {9, 10, 11});
 
-	veekay::vec3 n5 = calculateNormal(bottom, front, right);
-	vertices.push_back({bottom, n5, {0.5f, 0.0f}});
-	vertices.push_back({front, n5, {0.0f, 0.5f}});
-	vertices.push_back({right, n5, {1.0f, 0.5f}});
+	vertices.push_back({bottom, n, uv});
+	vertices.push_back({front, n, uv});
+	vertices.push_back({right, n, uv});
 	indices.insert(indices.end(), {12, 13, 14});
 
-	veekay::vec3 n6 = calculateNormal(bottom, left, front);
-	vertices.push_back({bottom, n6, {0.5f, 0.0f}});
-	vertices.push_back({left, n6, {0.0f, 0.5f}});
-	vertices.push_back({front, n6, {0.0f, 0.5f}});
+	vertices.push_back({bottom, n, uv});
+	vertices.push_back({left, n, uv});
+	vertices.push_back({front, n, uv});
 	indices.insert(indices.end(), {15, 16, 17});
 
-	veekay::vec3 n7 = calculateNormal(bottom, back, left);
-	vertices.push_back({bottom, n7, {0.5f, 0.0f}});
-	vertices.push_back({back, n7, {1.0f, 0.5f}});
-	vertices.push_back({left, n7, {0.0f, 0.5f}});
+	vertices.push_back({bottom, n, uv});
+	vertices.push_back({back, n, uv});
+	vertices.push_back({left, n, uv});
 	indices.insert(indices.end(), {18, 19, 20});
 
-	veekay::vec3 n8 = calculateNormal(bottom, right, back);
-	vertices.push_back({bottom, n8, {0.5f, 0.0f}});
-	vertices.push_back({right, n8, {1.0f, 0.5f}});
-	vertices.push_back({back, n8, {1.0f, 0.5f}});
+	vertices.push_back({bottom, n, uv});
+	vertices.push_back({right, n, uv});
+	vertices.push_back({back, n, uv});
 	indices.insert(indices.end(), {21, 22, 23});
 
 	Mesh mesh;
@@ -514,9 +501,7 @@ void initialize(VkCommandBuffer cmd) {
 		nullptr,
 		VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
 
-	// Создание октаэдра
 	octahedron_mesh = createOctahedron();
-
 
 
 	{
@@ -564,15 +549,12 @@ void update(double time) {
 	float dt = static_cast<float>(time - last_time);
 	last_time = time;
 
-	// Обновление вращения
-	rotation_x += rotation_speed * dt * 45.0f; // 45 градусов в секунду
-	rotation_y += rotation_speed * dt * 30.0f; // 30 градусов в секунду
+	rotation_x += rotation_speed * dt * 45.0f;
+	rotation_y += rotation_speed * dt * 30.0f;
 	
-	// Ограничиваем углы для избежания переполнения
 	if (rotation_x > 360.0f) rotation_x -= 360.0f;
 	if (rotation_y > 360.0f) rotation_y -= 360.0f;
 
-	// Обновление uniform буферов
 	SceneUniforms scene_uniforms;
 	scene_uniforms.view_projection = camera.view_projection(
 		static_cast<float>(veekay::app.window_width) / static_cast<float>(veekay::app.window_height)
@@ -585,21 +567,16 @@ void update(double time) {
 
 	ModelUniforms model_uniforms;
 	model_uniforms.model = octahedron_transform.matrix();
-	model_uniforms.albedo_color = {1.0f, 0.5f, 0.2f}; // Оранжевый цвет
+	model_uniforms.albedo_color = {1.0f, 0.5f, 0.2f}; 
 
 	memcpy(model_uniforms_buffer->mapped_region, &model_uniforms, sizeof(ModelUniforms));
 
-	// UI для изменения скорости вращения
 	ImGui::Begin("Octahedron Controls");
 	ImGui::Text("Double Rotation Octahedron");
 	ImGui::Separator();
 	ImGui::SliderFloat("Rotation Speed", &rotation_speed, 0.0f, 3.0f);
 	ImGui::Text("Rotation X: %.1f degrees", rotation_x);
 	ImGui::Text("Rotation Y: %.1f degrees", rotation_y);
-	ImGui::Separator();
-	ImGui::Text("8 triangular faces");
-	ImGui::Text("Perspective projection");
-	ImGui::Text("Lighting: diffuse + ambient");
 	ImGui::End();
 }
 
