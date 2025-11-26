@@ -121,7 +121,7 @@ veekay::mat4 Transform::matrix() const {
 	auto rz = veekay::mat4::rotation({0.0f, 0.0f, 1.0f}, toRadians(rotation.z));
 	auto s = veekay::mat4::scaling(scale);
 
-	return t * rx * ry * rz * s;
+	return s * rz * ry * rx * t;
 }
 
 veekay::mat4 Camera::view() const {
@@ -164,59 +164,36 @@ VkShaderModule loadShaderModule(const char* path) {
 
 	return result;
 }
-
 Mesh createOctahedron() {
 	std::vector<Vertex> vertices;
 	std::vector<uint32_t> indices;
+
 	veekay::vec2 uv = {0, 0};
 	veekay::vec3 n = {0, 0, 0};
 
-	veekay::vec3 top = {0.0f, 1.0f, 0.0f};
+	veekay::vec3 top    = {0.0f,  1.0f, 0.0f};
+	veekay::vec3 right  = {1.0f,  0.0f, 0.0f};
+	veekay::vec3 front  = {0.0f,  0.0f, 1.0f};
+	veekay::vec3 left   = {-1.0f, 0.0f, 0.0f};
+	veekay::vec3 back   = {0.0f,  0.0f,-1.0f};
 	veekay::vec3 bottom = {0.0f, -1.0f, 0.0f};
-	veekay::vec3 front = {0.0f, 0.0f, 1.0f};
-	veekay::vec3 back = {0.0f, 0.0f, -1.0f};
-	veekay::vec3 right = {1.0f, 0.0f, 0.0f};
-	veekay::vec3 left = {-1.0f, 0.0f, 0.0f};
 
-	vertices.push_back({top, n, uv});
-	vertices.push_back({right, n, uv});
-	vertices.push_back({front, n, uv});
+	vertices.push_back({top,    n, uv});
+	vertices.push_back({right,  n, uv});
+	vertices.push_back({front,  n, uv});
+	vertices.push_back({left,   n, uv});
+	vertices.push_back({back,   n, uv});
+	vertices.push_back({bottom, n, uv});
+
 	indices.insert(indices.end(), {0, 1, 2});
+	indices.insert(indices.end(), {0, 2, 3});
+	indices.insert(indices.end(), {0, 3, 4});
+	indices.insert(indices.end(), {0, 4, 1});
 
-	vertices.push_back({top, n, uv});
-	vertices.push_back({front, n, uv});
-	vertices.push_back({left, n, uv});
-	indices.insert(indices.end(), {3, 4, 5});
-
-	vertices.push_back({top, n, uv});
-	vertices.push_back({left, n, uv});
-	vertices.push_back({back, n, uv});
-	indices.insert(indices.end(), {6, 7, 8});
-
-	vertices.push_back({top, n, uv});
-	vertices.push_back({back, n, uv});
-	vertices.push_back({right, n, uv});
-	indices.insert(indices.end(), {9, 10, 11});
-
-	vertices.push_back({bottom, n, uv});
-	vertices.push_back({front, n, uv});
-	vertices.push_back({right, n, uv});
-	indices.insert(indices.end(), {12, 13, 14});
-
-	vertices.push_back({bottom, n, uv});
-	vertices.push_back({left, n, uv});
-	vertices.push_back({front, n, uv});
-	indices.insert(indices.end(), {15, 16, 17});
-
-	vertices.push_back({bottom, n, uv});
-	vertices.push_back({back, n, uv});
-	vertices.push_back({left, n, uv});
-	indices.insert(indices.end(), {18, 19, 20});
-
-	vertices.push_back({bottom, n, uv});
-	vertices.push_back({right, n, uv});
-	vertices.push_back({back, n, uv});
-	indices.insert(indices.end(), {21, 22, 23});
+	indices.insert(indices.end(), {5, 2, 1});
+	indices.insert(indices.end(), {5, 3, 2});
+	indices.insert(indices.end(), {5, 4, 3});
+	indices.insert(indices.end(), {5, 1, 4});
 
 	Mesh mesh;
 	mesh.indices = indices.size();
