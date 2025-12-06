@@ -4,6 +4,7 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
+#include <sstream>
 
 #define _USE_MATH_DEFINES
 #include <math.h>
@@ -38,26 +39,6 @@ struct PointLight {
 	veekay::vec3 ambient; float _pad1;
 	veekay::vec3 diffuse; float _pad2;
 	veekay::vec3 specular; float _pad3;
-	float constant;
-	float linear;
-	float quadratic;
-	float _pad4;
-};
-
-struct SpotLight {
-	veekay::vec3 position; float _pad0;
-	veekay::vec3 direction; float _pad1;
-	veekay::vec3 ambient; float _pad2;
-	veekay::vec3 diffuse; float _pad3;
-	veekay::vec3 specular; float _pad4;
-	float cutOff;
-	float outerCutOff;
-	float constant;
-	float linear;
-	float quadratic;
-	float _pad5;
-	float _pad6;
-	float _pad7;
 };
 
 struct SceneUniforms {
@@ -65,9 +46,9 @@ struct SceneUniforms {
 	veekay::vec3 view_pos; float _pad0;
 	DirectionalLight dir_light;
 	int num_point_lights;
-	int num_spot_lights;
 	float _pad1;
 	float _pad2;
+	float _pad3;
 };
 
 struct ModelUniforms {
@@ -135,7 +116,6 @@ inline namespace {
 	};
 
 	std::vector<PointLight> point_lights;
-	std::vector<SpotLight> spot_lights;
 }
 
 // NOTE: Vulkan objects
@@ -153,10 +133,8 @@ inline namespace {
 	veekay::graphics::Buffer* scene_uniforms_buffer;
 	veekay::graphics::Buffer* model_uniforms_buffer;
 	veekay::graphics::Buffer* point_lights_buffer;
-	veekay::graphics::Buffer* spot_lights_buffer;
 
-	Mesh plane_mesh;
-	Mesh cube_mesh;
+
 
 	veekay::graphics::Texture* missing_texture;
 	VkSampler missing_texture_sampler;
@@ -180,11 +158,30 @@ veekay::mat4 Transform::matrix() const {
 }
 
 veekay::mat4 Camera::view() const {
-	auto ry = veekay::mat4::rotation({0.0f, 1.0f, 0.0f}, -rotation.y);
-	auto rx = veekay::mat4::rotation({1.0f, 0.0f, 0.0f}, -rotation.x);
-	auto t = veekay::mat4::translation(-position);
+	float cy = cosf(rotation.y);
+	float sy = sinf(rotation.y);
+	float cx = cosf(rotation.x);
+	float sx = sinf(rotation.x);
 
-	return t * rx * ry;
+	veekay::vec3 forward = {-sy * cx, sx, -cy * cx};
+	veekay::vec3 right = {cy, 0.0f, -sy};
+	veekay::vec3 up = veekay::vec3::cross(right, forward);
+
+	veekay::mat4 result = veekay::mat4::identity();
+	result[0][0] = right.x;
+	result[1][0] = right.y;
+	result[2][0] = right.z;
+	result[0][1] = up.x;
+	result[1][1] = up.y;
+	result[2][1] = up.z;
+	result[0][2] = -forward.x;
+	result[1][2] = -forward.y;
+	result[2][2] = -forward.z;
+	result[3][0] = -veekay::vec3::dot(right, position);
+	result[3][1] = -veekay::vec3::dot(up, position);
+	result[3][2] = veekay::vec3::dot(forward, position);
+
+	return result;
 }
 
 veekay::mat4 Camera::view_projection(float aspect_ratio) const {
@@ -195,6 +192,86 @@ veekay::mat4 Camera::view_projection(float aspect_ratio) const {
 
 // NOTE: Loads shader byte code from file
 // NOTE: Your shaders are compiled via CMake with this code too, look it up
+Mesh loadObjMesh(const char* path) {
+	std::ifstream file(path);
+	if (!file.is_open()) {
+		std::cerr << "Failed to open OBJ file: " << path << "\n";
+		return {};
+	}
+
+	std::vector<veekay::vec3> positions;
+	std::vector<veekay::vec3> normals;
+	std::vector<veekay::vec2> uvs;
+	std::vector<Vertex> vertices;
+	std::vector<uint32_t> indices;
+
+	std::string line;
+	while (std::getline(file, line)) {
+		if (line.empty() || line[0] == '#') continue;
+
+		std::istringstream iss(line);
+		std::string prefix;
+		iss >> prefix;
+
+		if (prefix == "v") {
+			veekay::vec3 pos;
+			iss >> pos.x >> pos.y >> pos.z;
+			positions.push_back(pos);
+		} else if (prefix == "vt") {
+			veekay::vec2 uv;
+			iss >> uv.x >> uv.y;
+			uvs.push_back(uv);
+		} else if (prefix == "vn") {
+			veekay::vec3 normal;
+			iss >> normal.x >> normal.y >> normal.z;
+			normals.push_back(normal);
+		} else if (prefix == "f") {
+			std::vector<std::string> face_verts;
+			std::string vertex_str;
+			while (iss >> vertex_str) {
+				face_verts.push_back(vertex_str);
+			}
+			
+			for (size_t i = 0; i < face_verts.size(); i++) {
+				int pos_idx = 0, uv_idx = 0, norm_idx = 0;
+				int matched = sscanf(face_verts[i].c_str(), "%d/%d/%d", &pos_idx, &uv_idx, &norm_idx);
+				if (matched < 3) {
+					matched = sscanf(face_verts[i].c_str(), "%d//%d", &pos_idx, &norm_idx);
+					if (matched < 2) {
+						sscanf(face_verts[i].c_str(), "%d", &pos_idx);
+					}
+				}
+
+				Vertex v;
+				v.position = (pos_idx > 0 && pos_idx <= positions.size()) ? positions[pos_idx - 1] : veekay::vec3{0, 0, 0};
+				v.uv = (uv_idx > 0 && uv_idx <= uvs.size()) ? uvs[uv_idx - 1] : veekay::vec2{0, 0};
+				v.normal = (norm_idx > 0 && norm_idx <= normals.size()) ? normals[norm_idx - 1] : veekay::vec3{0, 1, 0};
+				
+				if (i < 3) {
+					indices.push_back(vertices.size());
+					vertices.push_back(v);
+				} else {
+					indices.push_back(vertices.size() - face_verts.size());
+					indices.push_back(vertices.size() - 1);
+					indices.push_back(vertices.size());
+					vertices.push_back(v);
+				}
+			}
+		}
+	}
+
+	Mesh mesh;
+	mesh.vertex_buffer = new veekay::graphics::Buffer(
+		vertices.size() * sizeof(Vertex), vertices.data(),
+		VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+	mesh.index_buffer = new veekay::graphics::Buffer(
+		indices.size() * sizeof(uint32_t), indices.data(),
+		VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+	mesh.indices = uint32_t(indices.size());
+
+	return mesh;
+}
+
 VkShaderModule loadShaderModule(const char* path) {
 	std::ifstream file(path, std::ios::binary | std::ios::ate);
 	size_t size = file.tellg();
@@ -429,7 +506,7 @@ void initialize(VkCommandBuffer cmd) {
 				},
 				{
 					.binding = 3,
-					.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+					.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 					.descriptorCount = 1,
 					.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
 				},
@@ -518,11 +595,6 @@ void initialize(VkCommandBuffer cmd) {
 		nullptr,
 		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
-	spot_lights_buffer = new veekay::graphics::Buffer(
-		16 * sizeof(SpotLight),
-		nullptr,
-		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-
 	// NOTE: This texture and sampler is used when texture could not be loaded
 	{
 		VkSamplerCreateInfo info{
@@ -546,6 +618,40 @@ void initialize(VkCommandBuffer cmd) {
 		                                                pixels);
 	}
 
+	// NOTE: Load texture from file
+	{
+		std::vector<unsigned char> image_data;
+		unsigned width, height;
+		unsigned error = lodepng::decode(image_data, width, height, "./assets/texture.png");
+		
+		if (error) {
+			std::cerr << "Failed to load texture: " << lodepng_error_text(error) << "\n";
+			texture = missing_texture;
+			texture_sampler = missing_texture_sampler;
+		} else {
+			texture = new veekay::graphics::Texture(cmd, width, height,
+			                                        VK_FORMAT_R8G8B8A8_UNORM,
+			                                        image_data.data());
+			
+			VkSamplerCreateInfo info{
+				.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+				.magFilter = VK_FILTER_LINEAR,
+				.minFilter = VK_FILTER_LINEAR,
+				.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+				.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+				.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+				.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+				.maxLod = VK_LOD_CLAMP_NONE,
+			};
+			
+			if (vkCreateSampler(device, &info, nullptr, &texture_sampler) != VK_SUCCESS) {
+				std::cerr << "Failed to create texture sampler\n";
+				veekay::app.running = false;
+				return;
+			}
+		}
+	}
+
 	{
 		VkDescriptorBufferInfo buffer_infos[] = {
 			{
@@ -563,11 +669,12 @@ void initialize(VkCommandBuffer cmd) {
 				.offset = 0,
 				.range = 16 * sizeof(PointLight),
 			},
-			{
-				.buffer = spot_lights_buffer->buffer,
-				.offset = 0,
-				.range = 16 * sizeof(SpotLight),
-			},
+		};
+
+		VkDescriptorImageInfo image_info{
+			.sampler = texture_sampler,
+			.imageView = texture->view,
+			.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 		};
 
 		VkWriteDescriptorSet write_infos[] = {
@@ -604,8 +711,8 @@ void initialize(VkCommandBuffer cmd) {
 				.dstBinding = 3,
 				.dstArrayElement = 0,
 				.descriptorCount = 1,
-				.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-				.pBufferInfo = &buffer_infos[3],
+				.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				.pImageInfo = &image_info,
 			},
 		};
 
@@ -613,160 +720,21 @@ void initialize(VkCommandBuffer cmd) {
 		                       write_infos, 0, nullptr);
 	}
 
-	// NOTE: Plane mesh initialization
-	{
-		// (v0)------(v1)
-		//  |  \       |
-		//  |   `--,   |
-		//  |       \  |
-		// (v3)------(v2)
-		std::vector<Vertex> vertices = {
-			{{-5.0f, 0.0f, 5.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-			{{5.0f, 0.0f, 5.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-			{{5.0f, 0.0f, -5.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}},
-			{{-5.0f, 0.0f, -5.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}},
-		};
-
-		std::vector<uint32_t> indices = {
-			0, 1, 2, 2, 3, 0
-		};
-
-		plane_mesh.vertex_buffer = new veekay::graphics::Buffer(
-			vertices.size() * sizeof(Vertex), vertices.data(),
-			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-
-		plane_mesh.index_buffer = new veekay::graphics::Buffer(
-			indices.size() * sizeof(uint32_t), indices.data(),
-			VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-
-		plane_mesh.indices = uint32_t(indices.size());
-	}
-
-	// NOTE: Cube mesh initialization
-	{
-		std::vector<Vertex> vertices = {
-			{{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {0.0f, 0.0f}},
-			{{+0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {1.0f, 0.0f}},
-			{{+0.5f, +0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {1.0f, 1.0f}},
-			{{-0.5f, +0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {0.0f, 1.0f}},
-
-			{{+0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-			{{+0.5f, -0.5f, +0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-			{{+0.5f, +0.5f, +0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}},
-			{{+0.5f, +0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}},
-
-			{{+0.5f, -0.5f, +0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
-			{{-0.5f, -0.5f, +0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
-			{{-0.5f, +0.5f, +0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-			{{+0.5f, +0.5f, +0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-
-			{{-0.5f, -0.5f, +0.5f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-			{{-0.5f, -0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-			{{-0.5f, +0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}},
-			{{-0.5f, +0.5f, +0.5f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}},
-
-			{{-0.5f, -0.5f, +0.5f}, {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f}},
-			{{+0.5f, -0.5f, +0.5f}, {0.0f, -1.0f, 0.0f}, {1.0f, 0.0f}},
-			{{+0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}, {1.0f, 1.0f}},
-			{{-0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}, {0.0f, 1.0f}},
-
-			{{-0.5f, +0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-			{{+0.5f, +0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-			{{+0.5f, +0.5f, +0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}},
-			{{-0.5f, +0.5f, +0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}},
-		};
-
-		std::vector<uint32_t> indices = {
-			0, 1, 2, 2, 3, 0,
-			4, 5, 6, 6, 7, 4,
-			8, 9, 10, 10, 11, 8,
-			12, 13, 14, 14, 15, 12,
-			16, 17, 18, 18, 19, 16,
-			20, 21, 22, 22, 23, 20,
-		};
-
-		cube_mesh.vertex_buffer = new veekay::graphics::Buffer(
-			vertices.size() * sizeof(Vertex), vertices.data(),
-			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-
-		cube_mesh.index_buffer = new veekay::graphics::Buffer(
-			indices.size() * sizeof(uint32_t), indices.data(),
-			VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-
-		cube_mesh.indices = uint32_t(indices.size());
-	}
-
-	// NOTE: Add models to scene
-	models.emplace_back(Model{
-		.mesh = plane_mesh,
-		.transform = Transform{},
-		.albedo_color = veekay::vec3{0.8f, 0.8f, 0.8f},
-		.specular_color = veekay::vec3{0.5f, 0.5f, 0.5f},
-		.shininess = 32.0f
-	});
-
-	models.emplace_back(Model{
-		.mesh = cube_mesh,
-		.transform = Transform{
-			.position = {-2.0f, -0.5f, -1.5f},
-		},
-		.albedo_color = veekay::vec3{1.0f, 0.0f, 0.0f},
-		.specular_color = veekay::vec3{1.0f, 1.0f, 1.0f},
-		.shininess = 64.0f
-	});
-
-	models.emplace_back(Model{
-		.mesh = cube_mesh,
-		.transform = Transform{
-			.position = {1.5f, -0.5f, -0.5f},
-		},
-		.albedo_color = veekay::vec3{0.0f, 1.0f, 0.0f},
-		.specular_color = veekay::vec3{1.0f, 1.0f, 1.0f},
-		.shininess = 64.0f
-	});
-
-	models.emplace_back(Model{
-		.mesh = cube_mesh,
-		.transform = Transform{
-			.position = {0.0f, -0.5f, 1.0f},
-		},
-		.albedo_color = veekay::vec3{0.0f, 0.0f, 1.0f},
-		.specular_color = veekay::vec3{1.0f, 1.0f, 1.0f},
-		.shininess = 64.0f
-	});
+	// NOTE: Scene starts empty
 
 	// NOTE: Initialize lights
 	point_lights.push_back(PointLight{
 		.position = {-2.0f, 1.5f, 0.0f},
 		.ambient = {0.1f, 0.0f, 0.0f},
 		.diffuse = {2.0f, 0.0f, 0.0f},
-		.specular = {1.0f, 1.0f, 1.0f},
-		.constant = 1.0f,
-		.linear = 0.09f,
-		.quadratic = 0.032f
+		.specular = {1.0f, 1.0f, 1.0f}
 	});
 
 	point_lights.push_back(PointLight{
 		.position = {2.0f, 1.5f, 0.0f},
 		.ambient = {0.0f, 0.1f, 0.0f},
 		.diffuse = {0.0f, 2.0f, 0.0f},
-		.specular = {1.0f, 1.0f, 1.0f},
-		.constant = 1.0f,
-		.linear = 0.09f,
-		.quadratic = 0.032f
-	});
-
-	spot_lights.push_back(SpotLight{
-		.position = {0.0f, 3.0f, 0.0f},
-		.direction = {0.0f, -1.0f, 0.0f},
-		.ambient = {0.0f, 0.0f, 0.0f},
-		.diffuse = {1.0f, 1.0f, 1.0f},
-		.specular = {1.0f, 1.0f, 1.0f},
-		.cutOff = cosf(toRadians(12.5f)),
-		.outerCutOff = cosf(toRadians(17.5f)),
-		.constant = 1.0f,
-		.linear = 0.09f,
-		.quadratic = 0.032f
+		.specular = {1.0f, 1.0f, 1.0f}
 	});
 }
 
@@ -774,16 +742,18 @@ void initialize(VkCommandBuffer cmd) {
 void shutdown() {
 	VkDevice& device = veekay::app.vk_device;
 
+	if (texture != missing_texture) {
+		vkDestroySampler(device, texture_sampler, nullptr);
+		delete texture;
+	}
 	vkDestroySampler(device, missing_texture_sampler, nullptr);
 	delete missing_texture;
 
-	delete cube_mesh.index_buffer;
-	delete cube_mesh.vertex_buffer;
+	for (auto& model : models) {
+		if (model.mesh.index_buffer) delete model.mesh.index_buffer;
+		if (model.mesh.vertex_buffer) delete model.mesh.vertex_buffer;
+	}
 
-	delete plane_mesh.index_buffer;
-	delete plane_mesh.vertex_buffer;
-
-	delete spot_lights_buffer;
 	delete point_lights_buffer;
 	delete model_uniforms_buffer;
 	delete scene_uniforms_buffer;
@@ -800,6 +770,47 @@ void shutdown() {
 void update(double time) {
 	ImGui::Begin("Controls:");
 	
+	if (ImGui::CollapsingHeader("Models", ImGuiTreeNodeFlags_DefaultOpen)) {
+		static char obj_path[256] = "./assets/model.obj";
+		ImGui::InputText("OBJ Path", obj_path, sizeof(obj_path));
+		
+		if (ImGui::Button("Load OBJ")) {
+			Mesh mesh = loadObjMesh(obj_path);
+			if (mesh.indices > 0) {
+				models.emplace_back(Model{
+					.mesh = mesh,
+					.transform = Transform{},
+					.albedo_color = veekay::vec3{1.0f, 1.0f, 1.0f},
+					.specular_color = veekay::vec3{1.0f, 1.0f, 1.0f},
+					.shininess = 64.0f
+				});
+			}
+		}
+		
+		for (size_t i = 0; i < models.size(); ++i) {
+			ImGui::PushID(i);
+			if (ImGui::TreeNode("", "Model %zu", i)) {
+				ImGui::DragFloat3("Position", &models[i].transform.position.x, 0.1f);
+				ImGui::DragFloat3("Rotation", &models[i].transform.rotation.x, 0.01f);
+				ImGui::DragFloat3("Scale", &models[i].transform.scale.x, 0.1f);
+				ImGui::ColorEdit3("Albedo", &models[i].albedo_color.x);
+				ImGui::ColorEdit3("Specular", &models[i].specular_color.x);
+				ImGui::DragFloat("Shininess", &models[i].shininess, 1.0f, 1.0f, 256.0f);
+				
+				if (ImGui::Button("Remove")) {
+					if (models[i].mesh.index_buffer) delete models[i].mesh.index_buffer;
+					if (models[i].mesh.vertex_buffer) delete models[i].mesh.vertex_buffer;
+					models.erase(models.begin() + i);
+					ImGui::TreePop();
+					ImGui::PopID();
+					break;
+				}
+				ImGui::TreePop();
+			}
+			ImGui::PopID();
+		}
+	}
+
 	if (ImGui::CollapsingHeader("Directional Light", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::DragFloat3("Direction##dir", &dir_light.direction.x, 0.01f);
 		ImGui::ColorEdit3("Ambient##dir", &dir_light.ambient.x);
@@ -813,10 +824,7 @@ void update(double time) {
 				.position = {0.0f, 1.5f, 0.0f},
 				.ambient = {0.05f, 0.05f, 0.05f},
 				.diffuse = {1.0f, 1.0f, 1.0f},
-				.specular = {1.0f, 1.0f, 1.0f},
-				.constant = 1.0f,
-				.linear = 0.09f,
-				.quadratic = 0.032f
+				.specular = {1.0f, 1.0f, 1.0f}
 			});
 		}
 		for (size_t i = 0; i < point_lights.size(); ++i) {
@@ -826,9 +834,6 @@ void update(double time) {
 				ImGui::ColorEdit3("Ambient", &point_lights[i].ambient.x);
 				ImGui::ColorEdit3("Diffuse", &point_lights[i].diffuse.x);
 				ImGui::ColorEdit3("Specular", &point_lights[i].specular.x);
-				ImGui::DragFloat("Constant", &point_lights[i].constant, 0.01f, 0.0f, 10.0f);
-				ImGui::DragFloat("Linear", &point_lights[i].linear, 0.001f, 0.0f, 1.0f);
-				ImGui::DragFloat("Quadratic", &point_lights[i].quadratic, 0.001f, 0.0f, 1.0f);
 				if (ImGui::Button("Remove")) {
 					point_lights.erase(point_lights.begin() + i);
 					ImGui::TreePop();
@@ -841,49 +846,7 @@ void update(double time) {
 		}
 	}
 
-	if (ImGui::CollapsingHeader("Spot Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
-		if (ImGui::Button("Add Spot Light") && spot_lights.size() < 16) {
-			spot_lights.push_back(SpotLight{
-				.position = {0.0f, 3.0f, 0.0f},
-				.direction = {0.0f, -1.0f, 0.0f},
-				.ambient = {0.0f, 0.0f, 0.0f},
-				.diffuse = {1.0f, 1.0f, 1.0f},
-				.specular = {1.0f, 1.0f, 1.0f},
-				.cutOff = cosf(toRadians(12.5f)),
-				.outerCutOff = cosf(toRadians(17.5f)),
-				.constant = 1.0f,
-				.linear = 0.09f,
-				.quadratic = 0.032f
-			});
-		}
-		for (size_t i = 0; i < spot_lights.size(); ++i) {
-			ImGui::PushID(100 + i);
-			if (ImGui::TreeNode("", "Spot Light %zu", i)) {
-				ImGui::DragFloat3("Position", &spot_lights[i].position.x, 0.1f);
-				ImGui::DragFloat3("Direction", &spot_lights[i].direction.x, 0.01f);
-				ImGui::ColorEdit3("Ambient", &spot_lights[i].ambient.x);
-				ImGui::ColorEdit3("Diffuse", &spot_lights[i].diffuse.x);
-				ImGui::ColorEdit3("Specular", &spot_lights[i].specular.x);
-				float cutoff_deg = acosf(spot_lights[i].cutOff) * 180.0f / M_PI;
-				float outer_deg = acosf(spot_lights[i].outerCutOff) * 180.0f / M_PI;
-				if (ImGui::DragFloat("Inner Cutoff", &cutoff_deg, 0.1f, 0.0f, 90.0f))
-					spot_lights[i].cutOff = cosf(cutoff_deg * M_PI / 180.0f);
-				if (ImGui::DragFloat("Outer Cutoff", &outer_deg, 0.1f, 0.0f, 90.0f))
-					spot_lights[i].outerCutOff = cosf(outer_deg * M_PI / 180.0f);
-				ImGui::DragFloat("Constant", &spot_lights[i].constant, 0.01f, 0.0f, 10.0f);
-				ImGui::DragFloat("Linear", &spot_lights[i].linear, 0.001f, 0.0f, 1.0f);
-				ImGui::DragFloat("Quadratic", &spot_lights[i].quadratic, 0.001f, 0.0f, 1.0f);
-				if (ImGui::Button("Remove")) {
-					spot_lights.erase(spot_lights.begin() + i);
-					ImGui::TreePop();
-					ImGui::PopID();
-					break;
-				}
-				ImGui::TreePop();
-			}
-			ImGui::PopID();
-		}
-	}
+
 
 	ImGui::End();
 
@@ -932,8 +895,7 @@ void update(double time) {
 		.view_projection = camera.view_projection(aspect_ratio),
 		.view_pos = camera.position,
 		.dir_light = dir_light,
-		.num_point_lights = int(point_lights.size()),
-		.num_spot_lights = int(spot_lights.size())
+		.num_point_lights = int(point_lights.size())
 	};
 
 	std::vector<ModelUniforms> model_uniforms(models.size());
@@ -956,12 +918,6 @@ void update(double time) {
 		std::copy(point_lights.begin(),
 		          point_lights.end(),
 		          static_cast<PointLight*>(point_lights_buffer->mapped_region));
-	}
-
-	if (!spot_lights.empty()) {
-		std::copy(spot_lights.begin(),
-		          spot_lights.end(),
-		          static_cast<SpotLight*>(spot_lights_buffer->mapped_region));
 	}
 }
 

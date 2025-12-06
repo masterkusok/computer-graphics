@@ -26,32 +26,9 @@ struct PointLight {
 	float _pad2;
 	vec3 specular;
 	float _pad3;
-	float constant;
-	float linear;
-	float quadratic;
-	float _pad4;
 };
 
-struct SpotLight {
-	vec3 position;
-	float _pad0;
-	vec3 direction;
-	float _pad1;
-	vec3 ambient;
-	float _pad2;
-	vec3 diffuse;
-	float _pad3;
-	vec3 specular;
-	float _pad4;
-	float cutOff;
-	float outerCutOff;
-	float constant;
-	float linear;
-	float quadratic;
-	float _pad5;
-	float _pad6;
-	float _pad7;
-};
+
 
 layout (binding = 0, std140) uniform SceneUniforms {
 	mat4 view_projection;
@@ -59,9 +36,9 @@ layout (binding = 0, std140) uniform SceneUniforms {
 	float _pad0;
 	DirectionalLight dir_light;
 	int num_point_lights;
-	int num_spot_lights;
 	float _pad1;
 	float _pad2;
+	float _pad3;
 };
 
 layout (binding = 1, std140) uniform ModelUniforms {
@@ -80,11 +57,11 @@ layout (binding = 2, std430) readonly buffer PointLightsBuffer {
 	PointLight point_lights[];
 };
 
-layout (binding = 3, std430) readonly buffer SpotLightsBuffer {
-	SpotLight spot_lights[];
-};
+layout (binding = 3) uniform sampler2D u_texture;
 
-vec3 calcDirectionalLight(DirectionalLight light, vec3 normal, vec3 viewDir) {
+
+
+vec3 calcDirectionalLight(DirectionalLight light, vec3 normal, vec3 viewDir, vec3 texColor) {
 	vec3 lightDir = normalize(-light.direction);
 	
 	float diff = max(dot(normal, lightDir), 0.0);
@@ -92,14 +69,14 @@ vec3 calcDirectionalLight(DirectionalLight light, vec3 normal, vec3 viewDir) {
 	vec3 halfwayDir = normalize(lightDir + viewDir);
 	float spec = pow(max(dot(normal, halfwayDir), 0.0), shininess);
 	
-	vec3 ambient = light.ambient * albedo_color;
-	vec3 diffuse = light.diffuse * diff * albedo_color;
+	vec3 ambient = light.ambient * texColor;
+	vec3 diffuse = light.diffuse * diff * texColor;
 	vec3 specular = light.specular * spec * specular_color;
 	
 	return ambient + diffuse + specular;
 }
 
-vec3 calcPointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewDir) {
+vec3 calcPointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewDir, vec3 texColor) {
 	vec3 lightDir = normalize(light.position - fragPos);
 	
 	float diff = max(dot(normal, lightDir), 0.0);
@@ -108,10 +85,10 @@ vec3 calcPointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewDir) {
 	float spec = pow(max(dot(normal, halfwayDir), 0.0), shininess);
 	
 	float distance = length(light.position - fragPos);
-	float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));
+	float attenuation = 1.0 / (distance * distance);
 	
-	vec3 ambient = light.ambient * albedo_color;
-	vec3 diffuse = light.diffuse * diff * albedo_color;
+	vec3 ambient = light.ambient * texColor;
+	vec3 diffuse = light.diffuse * diff * texColor;
 	vec3 specular = light.specular * spec * specular_color;
 	
 	ambient *= attenuation;
@@ -121,45 +98,18 @@ vec3 calcPointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewDir) {
 	return ambient + diffuse + specular;
 }
 
-vec3 calcSpotLight(SpotLight light, vec3 normal, vec3 fragPos, vec3 viewDir) {
-	vec3 lightDir = normalize(light.position - fragPos);
-	
-	float diff = max(dot(normal, lightDir), 0.0);
-	
-	vec3 halfwayDir = normalize(lightDir + viewDir);
-	float spec = pow(max(dot(normal, halfwayDir), 0.0), shininess);
-	
-	float distance = length(light.position - fragPos);
-	float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));
-	
-	float theta = dot(lightDir, normalize(-light.direction));
-	float epsilon = light.cutOff - light.outerCutOff;
-	float intensity = clamp((theta - light.outerCutOff) / epsilon, 0.0, 1.0);
-	
-	vec3 ambient = light.ambient * albedo_color;
-	vec3 diffuse = light.diffuse * diff * albedo_color;
-	vec3 specular = light.specular * spec * specular_color;
-	
-	ambient *= attenuation * intensity;
-	diffuse *= attenuation * intensity;
-	specular *= attenuation * intensity;
-	
-	return ambient + diffuse + specular;
-}
+
 
 void main() {
 	vec3 norm = normalize(f_normal);
 	vec3 viewDir = normalize(view_pos - f_position);
+	vec3 texColor = texture(u_texture, f_uv).rgb * albedo_color;
 	
-	vec3 result = calcDirectionalLight(dir_light, norm, viewDir);
+	vec3 result = calcDirectionalLight(dir_light, norm, viewDir, texColor);
 	
 	for (int i = 0; i < num_point_lights; i++) {
-		result += calcPointLight(point_lights[i], norm, f_position, viewDir);
+		result += calcPointLight(point_lights[i], norm, f_position, viewDir, texColor);
 	}
-	
-	for (int i = 0; i < num_spot_lights; i++) {
-		result += calcSpotLight(spot_lights[i], norm, f_position, viewDir);
-	}
-	
+		
 	final_color = vec4(result, 1.0);
 }
